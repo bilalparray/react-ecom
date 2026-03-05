@@ -14,9 +14,9 @@ const OPEN_CORS = process.env.OPEN_CORS === "true";
 
 // 🔒 Whitelist (used only when OPEN_CORS=false)
 const allowedOrigins = [
-  "https://wildvalleyfoods.in",
-  "https://www.wildvalleyfoods.in",
-  "https://dev.wildvalleyfoods.in",
+  "https://alpinesaffron.in",
+  "https://www.alpinesaffron.in",
+  "https://api.alpinesaffron.in",
 
   "http://13.235.53.15:8081",
   "http://13.235.53.15:4200",

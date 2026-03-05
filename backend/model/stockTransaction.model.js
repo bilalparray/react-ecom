@@ -25,7 +25,8 @@ const createStockTransactionModel = (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: false,
       references: { model: 'ProductVariants', key: 'id' },
-      onDelete: 'CASCADE',
+      onDelete: 'RESTRICT',
+      onUpdate: 'CASCADE',
     },
     quantity: {
       type: DataTypes.INTEGER,
@@ -62,7 +63,9 @@ const createStockTransactionModel = (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: true,
       references: { model: 'StockTransactions', key: 'id' },
-      comment: 'Transaction ID that reversed this one',
+      onDelete: 'RESTRICT',
+      onUpdate: 'CASCADE',
+      comment: 'Transaction ID that reversed this one - RESTRICT to preserve audit trail',
     },
     metadata: {
       type: DataTypes.JSONB,
@@ -88,11 +91,11 @@ const createStockTransactionModel = (sequelize) => {
 
   // Associations
   StockTransaction.belongsTo(Order, { foreignKey: 'orderId', as: 'order' });
-  StockTransaction.belongsTo(ProductVariant, { foreignKey: 'productVariantId', as: 'variant' });
-  StockTransaction.belongsTo(StockTransaction, { foreignKey: 'reversedByTransactionId', as: 'reversedBy' });
+  StockTransaction.belongsTo(ProductVariant, { foreignKey: 'productVariantId', as: 'variant', onDelete: 'RESTRICT' });
+  StockTransaction.belongsTo(StockTransaction, { foreignKey: 'reversedByTransactionId', as: 'reversedBy', onDelete: 'RESTRICT' });
 
   Order.hasMany(StockTransaction, { foreignKey: 'orderId', as: 'stockTransactions' });
-  ProductVariant.hasMany(StockTransaction, { foreignKey: 'productVariantId', as: 'stockTransactions' });
+  ProductVariant.hasMany(StockTransaction, { foreignKey: 'productVariantId', as: 'stockTransactions', onDelete: 'RESTRICT' });
 
   return StockTransaction;
 };

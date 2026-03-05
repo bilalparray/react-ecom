@@ -197,6 +197,9 @@ async function handlePaymentCaptured(eventPayload, event) {
     const isAmountValid = amountPaise === expectedAmountPaise;
 
     // 💾 Create / Update payment
+    // When payment is successful (payment.captured or order.paid event), set status to "captured"
+    const paymentStatusToSave = "captured"; // Payment is successful, so set to captured
+    
     const paymentData = {
       razorpayPaymentId,
       razorpayOrderId,
@@ -205,7 +208,7 @@ async function handlePaymentCaptured(eventPayload, event) {
       amount: order.amount,
       amountPaise,
       currency: paymentEntity.currency || "INR",
-      status: paymentStatus,
+      status: paymentStatusToSave,
       method: paymentEntity.method || null,
       isAmountValid,
       isProcessed: true,
@@ -213,7 +216,8 @@ async function handlePaymentCaptured(eventPayload, event) {
       metadata: {
         razorpayPayment: paymentEntity,
         razorpayOrder: orderEntity,
-        event
+        event,
+        originalRazorpayStatus: paymentStatus // Store original status for reference
       }
     };
 
@@ -225,6 +229,7 @@ async function handlePaymentCaptured(eventPayload, event) {
     }
 
     // 📌 Decide order status
+    // When payment is successful, set order status to "paid"
     let orderStatus;
 
     if (!isAmountValid) {
@@ -232,10 +237,9 @@ async function handlePaymentCaptured(eventPayload, event) {
       console.warn(
         `⚠️ Amount mismatch for order ${order.id}. Expected: ${expectedAmountPaise}, Got: ${amountPaise}`
       );
-    } else if (paymentStatus === "captured") {
-      orderStatus = "paid";
     } else {
-      orderStatus = "payment_pending";
+      // Payment is successful, so set order status to "paid"
+      orderStatus = "paid";
     }
 
     // 🔒 Update order only once
@@ -253,6 +257,7 @@ async function handlePaymentCaptured(eventPayload, event) {
       // ✅ Handle stock management based on status transition
       // Only reduce stock when order transitions to "paid"
       if (orderStatus === "paid") {
+        console.log(`🔄 [WEBHOOK] Attempting stock reduction for order ${order.id} (event: ${event})`);
         try {
           const stockResult = await reduceStockForOrder(
             order.id,
@@ -265,19 +270,26 @@ async function handlePaymentCaptured(eventPayload, event) {
             }
           );
           
-          if (!stockResult.success && stockResult.errors) {
-            console.error("⚠️ Stock reduction completed with warnings:", stockResult.errors);
+          if (stockResult.skipped) {
+            console.log(`ℹ️ [WEBHOOK] Stock reduction skipped: ${stockResult.message}`);
+          } else if (!stockResult.success && stockResult.errors) {
+            console.error(`⚠️ [WEBHOOK] Stock reduction completed with warnings:`, stockResult.errors);
+          } else {
+            console.log(`✅ [WEBHOOK] Stock reduction successful: ${stockResult.message}`);
           }
         } catch (stockErr) {
-          console.error("❌ Error reducing stock in webhook:", stockErr);
+          console.error(`❌ [WEBHOOK] CRITICAL: Error reducing stock in webhook:`, stockErr);
+          console.error(`❌ [WEBHOOK] Stack:`, stockErr.stack);
           // Don't fail webhook processing if stock reduction fails
         }
+      } else {
+        console.log(`ℹ️ [WEBHOOK] Skipping stock reduction - Order status: ${orderStatus}`);
       }
     }
 
     return {
       processed: true,
-      message: `Payment ${paymentStatus} handled successfully`,
+      message: `Payment captured successfully (status: paid)`,
       paymentId: payment.id,
       orderId: order.id,
       isAmountValid
@@ -316,8 +328,9 @@ async function handlePaymentFailed(eventPayload) {
 
       // ✅ Restore stock if order was previously paid
       if (oldStatus === "paid") {
+        console.log(`🔄 [WEBHOOK-FAILED] Attempting stock restoration for order ${order.id}`);
         try {
-          await restoreStockForOrder(
+          const stockResult = await restoreStockForOrder(
             order.id,
             "failed",
             {
@@ -327,9 +340,18 @@ async function handlePaymentFailed(eventPayload) {
               reason: "Payment failed after being paid",
             }
           );
+          
+          if (stockResult.skipped) {
+            console.log(`ℹ️ [WEBHOOK-FAILED] Stock restoration skipped: ${stockResult.message}`);
+          } else {
+            console.log(`✅ [WEBHOOK-FAILED] Stock restoration successful: ${stockResult.message}`);
+          }
         } catch (stockErr) {
-          console.error("❌ Error restoring stock for failed payment:", stockErr);
+          console.error(`❌ [WEBHOOK-FAILED] CRITICAL: Error restoring stock for failed payment:`, stockErr);
+          console.error(`❌ [WEBHOOK-FAILED] Stack:`, stockErr.stack);
         }
+      } else {
+        console.log(`ℹ️ [WEBHOOK-FAILED] Skipping stock restoration - Order was not paid (status: ${oldStatus})`);
       }
     }
 
@@ -412,8 +434,9 @@ async function handleRefundProcessed(eventPayload) {
       // ✅ Restore stock when order is refunded (full refund only)
       // For partial refunds, you may want different logic (e.g., restore partial quantity)
       if (isFullRefund && oldStatus === "paid") {
+        console.log(`🔄 [WEBHOOK-REFUND] Attempting stock restoration for order ${order.id} (full refund)`);
         try {
-          await restoreStockForOrder(
+          const stockResult = await restoreStockForOrder(
             order.id,
             newStatus,
             {
@@ -424,9 +447,18 @@ async function handleRefundProcessed(eventPayload) {
               isFullRefund,
             }
           );
+          
+          if (stockResult.skipped) {
+            console.log(`ℹ️ [WEBHOOK-REFUND] Stock restoration skipped: ${stockResult.message}`);
+          } else {
+            console.log(`✅ [WEBHOOK-REFUND] Stock restoration successful: ${stockResult.message}`);
+          }
         } catch (stockErr) {
-          console.error("❌ Error restoring stock for refund:", stockErr);
+          console.error(`❌ [WEBHOOK-REFUND] CRITICAL: Error restoring stock for refund:`, stockErr);
+          console.error(`❌ [WEBHOOK-REFUND] Stack:`, stockErr.stack);
         }
+      } else {
+        console.log(`ℹ️ [WEBHOOK-REFUND] Skipping stock restoration - Full refund: ${isFullRefund}, Old status: ${oldStatus}`);
       }
     }
 

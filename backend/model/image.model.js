@@ -20,7 +20,8 @@ const createImageModel = (sequelize) => {
         model: 'Products',
         key: 'id',
       },
-      onDelete: 'CASCADE',
+      onDelete: 'RESTRICT',
+      onUpdate: 'CASCADE',
     },
   }, {
     timestamps: true,
@@ -29,8 +30,8 @@ const createImageModel = (sequelize) => {
   });
 
   // Associations
-  Image.belongsTo(Product, { foreignKey: 'productId', as: 'product' });
-  Product.hasMany(Image, { foreignKey: 'productId', as: 'images' });
+  Image.belongsTo(Product, { foreignKey: 'productId', as: 'product', onDelete: 'RESTRICT' });
+  Product.hasMany(Image, { foreignKey: 'productId', as: 'images', onDelete: 'RESTRICT' });
 
   return Image;
 };

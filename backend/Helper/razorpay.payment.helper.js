@@ -62,15 +62,27 @@ export const generateOrderPaymentLink = async (order, customer, amount) => {
     return paymentLink;
 
   } catch (error) {
-    console.error("❌ PAYMENT LINK GENERATION ERROR:", error);
+    const statusCode = error.statusCode || error.status;
+    const description = error.error?.description || error.description || error.message || "Unknown error";
+    const code = error.error?.code;
 
-    // Better error message with specific details
-    if (error.statusCode === 400 && error.error?.description) {
-      throw new Error(`Payment gateway error: ${error.error.description}`);
-    } else if (error.error?.code === 'BAD_REQUEST_ERROR') {
-      throw new Error(`Payment gateway validation error: ${error.error.description}`);
-    } else {
-      throw new Error(`Failed to generate payment link: ${error.message || 'Unknown error'}`);
+    console.error("❌ PAYMENT LINK GENERATION ERROR:", {
+      statusCode,
+      code,
+      description,
+      full: error.error || error
+    });
+
+    const isLiveModeDisabled = /live mode is disabled|livemode|cannot create.*live/i.test(description);
+    const isFeatureNotEnabled = /not enabled|enable.*account|500|feature/i.test(description);
+
+    let msg = `Payment gateway error: ${description}`;
+    if (isLiveModeDisabled) {
+      msg += " Use test keys in production until live mode is enabled, or enable live mode in Razorpay Dashboard.";
+    } else if (isFeatureNotEnabled || statusCode === 500) {
+      msg += " If this persists, ensure Payment Links are enabled for your Razorpay account (contact Razorpay support).";
     }
+
+    throw new Error(msg);
   }
 };

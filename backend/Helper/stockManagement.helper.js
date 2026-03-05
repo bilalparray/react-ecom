@@ -51,9 +51,11 @@ export async function reduceStockForOrder(orderId, orderStatus = 'paid', metadat
   let shouldCommit = !transaction;
 
   try {
+    console.log(`🚀 [STOCK-REDUCE] Starting stock reduction for order ${orderId}, status: ${orderStatus}`);
+    
     // Idempotency check: Don't reduce stock twice
     if (await hasStockBeenReduced(orderId)) {
-      console.log(`ℹ️ Stock already reduced for order ${orderId}, skipping`);
+      console.log(`ℹ️ [STOCK-REDUCE] Stock already reduced for order ${orderId}, skipping (idempotent)`);
       if (shouldCommit) await t.rollback();
       return {
         success: true,
@@ -63,16 +65,10 @@ export async function reduceStockForOrder(orderId, orderStatus = 'paid', metadat
       };
     }
 
-    // Fetch all order records with variant info
+    // ✅ CRITICAL FIX: Fetch order records first, then fetch variants directly with locking
     const orderRecords = await OrderRecord.findAll({
       where: { orderId },
-      include: [
-        {
-          model: ProductVariant,
-          as: 'variant',
-          required: true,
-        },
-      ],
+      attributes: ['id', 'productVariantId', 'quantity'],
       transaction: t,
     });
 
@@ -80,34 +76,65 @@ export async function reduceStockForOrder(orderId, orderStatus = 'paid', metadat
       throw new Error(`No order records found for order ${orderId}`);
     }
 
+    console.log(`📦 [STOCK-REDUCE] Processing ${orderRecords.length} order record(s) for order ${orderId}`);
+
     const stockTransactions = [];
     const errors = [];
 
-    // Process each variant atomically
+    // ✅ Process each variant atomically with direct fetch and row-level locking
     for (const record of orderRecords) {
-      const variant = record.variant;
-      if (!variant) {
-        errors.push(`Variant not found for order record ${record.id}`);
+      const productVariantId = record.productVariantId;
+      const quantityOrdered = Number(record.quantity) || 0;
+
+      if (!productVariantId) {
+        errors.push(`ProductVariantId missing for order record ${record.id}`);
         continue;
       }
 
-      const quantityOrdered = Number(record.quantity) || 0;
       if (quantityOrdered <= 0) {
-        console.warn(`⚠️ Invalid quantity for order record ${record.id}: ${quantityOrdered}`);
+        console.warn(`⚠️ [STOCK-REDUCE] Invalid quantity for order record ${record.id}: ${quantityOrdered}`);
+        continue;
+      }
+
+      // ✅ CRITICAL FIX: Fetch variant directly with row-level lock (SELECT FOR UPDATE)
+      const variant = await ProductVariant.findByPk(productVariantId, {
+        transaction: t,
+        lock: t.LOCK.UPDATE, // Row-level lock prevents concurrent modifications
+      });
+
+      if (!variant) {
+        const error = `Variant ${productVariantId} not found for order record ${record.id}`;
+        console.error(`❌ [STOCK-REDUCE] ${error}`);
+        errors.push(error);
         continue;
       }
 
       const currentStock = Number(variant.stock) || 0;
+      console.log(`🔍 [STOCK-REDUCE] Variant ${variant.id} (${variant.sku}): Current stock = ${currentStock}, Ordered = ${quantityOrdered}`);
 
       // Validate stock availability
       if (currentStock < quantityOrdered) {
         const error = `Insufficient stock for variant ${variant.id} (${variant.sku}). Current: ${currentStock}, Ordered: ${quantityOrdered}`;
-        console.error(`❌ ${error}`);
+        console.error(`❌ [STOCK-REDUCE] ${error}`);
         errors.push(error);
         
         // Still create transaction record for audit, but set stock to 0
         const newStock = 0;
-        await variant.update({ stock: newStock }, { transaction: t });
+        
+        // ✅ CRITICAL FIX: Use direct update with WHERE clause for atomicity
+        const [affectedRows] = await ProductVariant.update(
+          { stock: newStock },
+          {
+            where: { id: productVariantId },
+            transaction: t,
+          }
+        );
+
+        if (affectedRows === 0) {
+          throw new Error(`Failed to update stock for variant ${productVariantId} - no rows affected`);
+        }
+
+        console.log(`⚠️ [STOCK-REDUCE] Set stock to 0 for variant ${variant.id} (insufficient stock). Rows affected: ${affectedRows}`);
         
         const stockTransaction = await StockTransaction.create({
           orderId,
@@ -128,9 +155,33 @@ export async function reduceStockForOrder(orderId, orderStatus = 'paid', metadat
         continue;
       }
 
-      // Atomically update stock
+      // ✅ CRITICAL FIX: Use atomic SQL update with WHERE clause
       const newStock = currentStock - quantityOrdered;
-      await variant.update({ stock: newStock }, { transaction: t });
+      
+      // Method 1: Use Model.update() with WHERE (most reliable)
+      const [affectedRows] = await ProductVariant.update(
+        { stock: newStock },
+        {
+          where: { id: productVariantId },
+          transaction: t,
+        }
+      );
+
+      if (affectedRows === 0) {
+        throw new Error(`Failed to update stock for variant ${productVariantId} - no rows affected`);
+      }
+
+      // ✅ Verify the update actually happened
+      const verifyVariant = await ProductVariant.findByPk(productVariantId, {
+        attributes: ['id', 'stock'],
+        transaction: t,
+      });
+
+      if (!verifyVariant || Number(verifyVariant.stock) !== newStock) {
+        throw new Error(`Stock update verification failed for variant ${productVariantId}. Expected: ${newStock}, Got: ${verifyVariant?.stock}`);
+      }
+
+      console.log(`✅ [STOCK-REDUCE] Variant ${variant.id} (${variant.sku}): ${currentStock} → ${newStock} (Rows affected: ${affectedRows}, Verified: ${verifyVariant.stock})`);
 
       // Create transaction record for audit
       const stockTransaction = await StockTransaction.create({
@@ -144,14 +195,18 @@ export async function reduceStockForOrder(orderId, orderStatus = 'paid', metadat
         metadata: {
           ...metadata,
           orderRecordId: record.id,
+          affectedRows,
+          verified: true,
         },
       }, { transaction: t });
 
       stockTransactions.push(stockTransaction);
-      console.log(`✅ Reduced stock for variant ${variant.id} (${variant.sku}): ${currentStock} → ${newStock}`);
     }
 
-    if (shouldCommit) await t.commit();
+    if (shouldCommit) {
+      await t.commit();
+      console.log(`✅ [STOCK-REDUCE] Transaction committed for order ${orderId}. ${stockTransactions.length} stock transaction(s) created.`);
+    }
 
     return {
       success: errors.length === 0,
@@ -163,8 +218,12 @@ export async function reduceStockForOrder(orderId, orderStatus = 'paid', metadat
     };
 
   } catch (err) {
-    console.error(`❌ Error reducing stock for order ${orderId}:`, err);
-    if (shouldCommit) await t.rollback();
+    console.error(`❌ [STOCK-REDUCE] Error reducing stock for order ${orderId}:`, err);
+    console.error(`❌ [STOCK-REDUCE] Stack trace:`, err.stack);
+    if (shouldCommit) {
+      await t.rollback();
+      console.error(`❌ [STOCK-REDUCE] Transaction rolled back for order ${orderId}`);
+    }
     throw err;
   }
 }
@@ -182,9 +241,11 @@ export async function restoreStockForOrder(orderId, orderStatus = 'cancelled', m
   let shouldCommit = !transaction;
 
   try {
+    console.log(`🚀 [STOCK-RESTORE] Starting stock restoration for order ${orderId}, status: ${orderStatus}`);
+    
     // Idempotency check: Don't restore stock twice
     if (await hasStockBeenRestored(orderId)) {
-      console.log(`ℹ️ Stock already restored for order ${orderId}, skipping`);
+      console.log(`ℹ️ [STOCK-RESTORE] Stock already restored for order ${orderId}, skipping (idempotent)`);
       if (shouldCommit) await t.rollback();
       return {
         success: true,
@@ -199,7 +260,7 @@ export async function restoreStockForOrder(orderId, orderStatus = 'cancelled', m
     const hasReduction = await hasStockBeenReduced(orderId);
     
     if (!hasReduction) {
-      console.log(`ℹ️ No stock reduction found for order ${orderId}, nothing to restore`);
+      console.log(`ℹ️ [STOCK-RESTORE] No stock reduction found for order ${orderId}, nothing to restore`);
       if (shouldCommit) await t.rollback();
       return {
         success: true,
@@ -219,18 +280,10 @@ export async function restoreStockForOrder(orderId, orderStatus = 'cancelled', m
       transaction: t,
     });
 
-
-    // Fetch all order records with variant info
+    // ✅ CRITICAL FIX: Fetch order records first, then fetch variants directly with locking
     const orderRecords = await OrderRecord.findAll({
       where: { orderId },
-      include: [
-        {
-          model: ProductVariant,
-          as: 'variant',
-          required: true,
-          lock: transaction ? transaction.LOCK.UPDATE : undefined,
-        },
-      ],
+      attributes: ['id', 'productVariantId', 'quantity'],
       transaction: t,
     });
 
@@ -238,31 +291,69 @@ export async function restoreStockForOrder(orderId, orderStatus = 'cancelled', m
       throw new Error(`No order records found for order ${orderId}`);
     }
 
+    console.log(`📦 [STOCK-RESTORE] Processing ${orderRecords.length} order record(s) for order ${orderId}`);
+
     const stockTransactions = [];
 
-    // Restore stock for each variant
+    // ✅ Restore stock for each variant atomically with direct fetch and row-level locking
     for (const record of orderRecords) {
-      const variant = record.variant;
-      if (!variant) {
-        console.warn(`⚠️ Variant not found for order record ${record.id}`);
+      const productVariantId = record.productVariantId;
+      const quantityToRestore = Number(record.quantity) || 0;
+
+      if (!productVariantId) {
+        console.warn(`⚠️ [STOCK-RESTORE] ProductVariantId missing for order record ${record.id}`);
         continue;
       }
 
-      const quantityToRestore = Number(record.quantity) || 0;
       if (quantityToRestore <= 0) {
-        console.warn(`⚠️ Invalid quantity for order record ${record.id}: ${quantityToRestore}`);
+        console.warn(`⚠️ [STOCK-RESTORE] Invalid quantity for order record ${record.id}: ${quantityToRestore}`);
+        continue;
+      }
+
+      // ✅ CRITICAL FIX: Fetch variant directly with row-level lock (SELECT FOR UPDATE)
+      const variant = await ProductVariant.findByPk(productVariantId, {
+        transaction: t,
+        lock: t.LOCK.UPDATE, // Row-level lock prevents concurrent modifications
+      });
+
+      if (!variant) {
+        console.warn(`⚠️ [STOCK-RESTORE] Variant ${productVariantId} not found for order record ${record.id}`);
         continue;
       }
 
       const currentStock = Number(variant.stock) || 0;
       const newStock = currentStock + quantityToRestore;
 
-      // Atomically update stock
-      await variant.update({ stock: newStock }, { transaction: t });
+      console.log(`🔍 [STOCK-RESTORE] Variant ${variant.id} (${variant.sku}): Current stock = ${currentStock}, Restoring = ${quantityToRestore}, New = ${newStock}`);
+
+      // ✅ CRITICAL FIX: Use atomic SQL update with WHERE clause
+      const [affectedRows] = await ProductVariant.update(
+        { stock: newStock },
+        {
+          where: { id: productVariantId },
+          transaction: t,
+        }
+      );
+
+      if (affectedRows === 0) {
+        throw new Error(`Failed to restore stock for variant ${productVariantId} - no rows affected`);
+      }
+
+      // ✅ Verify the update actually happened
+      const verifyVariant = await ProductVariant.findByPk(productVariantId, {
+        attributes: ['id', 'stock'],
+        transaction: t,
+      });
+
+      if (!verifyVariant || Number(verifyVariant.stock) !== newStock) {
+        throw new Error(`Stock restore verification failed for variant ${productVariantId}. Expected: ${newStock}, Got: ${verifyVariant?.stock}`);
+      }
+
+      console.log(`✅ [STOCK-RESTORE] Variant ${variant.id} (${variant.sku}): ${currentStock} → ${newStock} (Rows affected: ${affectedRows}, Verified: ${verifyVariant.stock})`);
 
       // Find the original reduction transaction to link
       const originalReduction = reductionTransactions.find(
-        t => t.productVariantId === variant.id
+        t => t.productVariantId === productVariantId
       );
 
       // Mark original reduction as reversed
@@ -284,14 +375,18 @@ export async function restoreStockForOrder(orderId, orderStatus = 'cancelled', m
           ...metadata,
           orderRecordId: record.id,
           originalReductionId: originalReduction?.id || null,
+          affectedRows,
+          verified: true,
         },
       }, { transaction: t });
 
       stockTransactions.push(stockTransaction);
-      console.log(`✅ Restored stock for variant ${variant.id} (${variant.sku}): ${currentStock} → ${newStock}`);
     }
 
-    if (shouldCommit) await t.commit();
+    if (shouldCommit) {
+      await t.commit();
+      console.log(`✅ [STOCK-RESTORE] Transaction committed for order ${orderId}. ${stockTransactions.length} stock transaction(s) created.`);
+    }
 
     return {
       success: true,
@@ -300,8 +395,12 @@ export async function restoreStockForOrder(orderId, orderStatus = 'cancelled', m
     };
 
   } catch (err) {
-    console.error(`❌ Error restoring stock for order ${orderId}:`, err);
-    if (shouldCommit) await t.rollback();
+    console.error(`❌ [STOCK-RESTORE] Error restoring stock for order ${orderId}:`, err);
+    console.error(`❌ [STOCK-RESTORE] Stack trace:`, err.stack);
+    if (shouldCommit) {
+      await t.rollback();
+      console.error(`❌ [STOCK-RESTORE] Transaction rolled back for order ${orderId}`);
+    }
     throw err;
   }
 }

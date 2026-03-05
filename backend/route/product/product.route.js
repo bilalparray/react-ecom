@@ -26,37 +26,125 @@ const router = express.Router();
  *   get:
  *     tags:
  *       - Products
- *     summary: Search products
- *     description: Search products using OData query parameters
+ *     summary: Search products (optimized)
+ *     description: |
+ *       Search products by name. Returns only essential data (id, name, thumbnail) for fast autocomplete/suggestions.
+ *       - Returns only active products (isActive = true)
+ *       - Returns only first image per product as compressed WebP thumbnail (200x200)
+ *       - Default limit is 6 results
+ *       - Supports both 'query' and 'q' parameters (backward compatible)
  *     security: []
  *     parameters:
  *       - in: query
- *         name: $filter
+ *         name: query
  *         schema:
  *           type: string
- *         description: OData filter expression
+ *         required: true
+ *         description: Search keyword (minimum 1 character). Also accepts 'q' parameter for backward compatibility.
+ *         example: "apple"
  *       - in: query
- *         name: $orderby
+ *         name: q
  *         schema:
  *           type: string
- *         description: OData orderby expression
+ *         required: false
+ *         description: Alternative search keyword parameter (backward compatible)
+ *         example: "banana"
  *       - in: query
- *         name: $skip
+ *         name: top
  *         schema:
  *           type: integer
- *         description: Number of records to skip
+ *           default: 6
+ *           minimum: 1
+ *           maximum: 50
+ *         description: Maximum number of results to return (default 6).
+ *         example: 10
  *       - in: query
- *         name: $top
+ *         name: skip
  *         schema:
  *           type: integer
- *         description: Number of records to return
+ *           default: 0
+ *           minimum: 0
+ *         description: Number of results to skip for pagination.
+ *         example: 0
  *     responses:
  *       200:
  *         description: Products retrieved successfully
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/SuccessResponse'
+ *               type: object
+ *               properties:
+ *                 responseStatusCode:
+ *                   type: integer
+ *                   example: 200
+ *                 isError:
+ *                   type: boolean
+ *                   example: false
+ *                 responseData:
+ *                   type: object
+ *                   properties:
+ *                     products:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           id:
+ *                             type: integer
+ *                             example: 1
+ *                           name:
+ *                             type: string
+ *                             example: "Apple"
+ *                           thumbnail:
+ *                             type: string
+ *                             nullable: true
+ *                             description: Base64 encoded WebP thumbnail (200x200) or null if no image
+ *                             example: "data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoCAAEAAkA4JQBdAD6jQAA3p..."
+ *                     total:
+ *                       type: integer
+ *                       description: Total number of matching products
+ *                       example: 25
+ *                     count:
+ *                       type: integer
+ *                       description: Number of products in current response
+ *                       example: 6
+ *       400:
+ *         description: Bad request - query parameter missing or too short
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 responseStatusCode:
+ *                   type: integer
+ *                   example: 400
+ *                 isError:
+ *                   type: boolean
+ *                   example: true
+ *                 errorData:
+ *                   type: object
+ *                   properties:
+ *                     displayMessage:
+ *                       type: string
+ *                       example: "Please enter at least 1 character"
+ *       404:
+ *         description: No products found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 responseStatusCode:
+ *                   type: integer
+ *                   example: 404
+ *                 isError:
+ *                   type: boolean
+ *                   example: true
+ *                 errorData:
+ *                   type: object
+ *                   properties:
+ *                     displayMessage:
+ *                       type: string
+ *                       example: "No products found for this keyword"
  */
 router.get("/search", searchProductsOdata);
 

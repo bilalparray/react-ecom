@@ -256,6 +256,12 @@ export const dbConnection = async () => {
 
     for (const model of modelsToSync) {
       try {
+        // ProductVariant: in production only create table if missing (no alter).
+        // In development use alter so schema stays in sync with the model.
+        if (model.name === 'ProductVariant') {
+          await model.sync(isProduction ? {} : { alter: true });
+          continue;
+        }
         await model.sync({ alter: true });
       } catch (err) {
         console.warn(`⚠️ Sync skipped for ${model.name}:`, err.message);

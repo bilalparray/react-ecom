@@ -37,7 +37,8 @@ const createReviewModel = (sequelize) => {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: { model: "Products", key: "id" },
-        onDelete: "CASCADE",
+        onDelete: "RESTRICT",
+        onUpdate: "CASCADE",
       },
       createdBy: {
         type: DataTypes.INTEGER,
@@ -59,12 +60,12 @@ const createReviewModel = (sequelize) => {
   Review.belongsTo(Product, {
     foreignKey: "productId",
     as: "product",
-    onDelete: "CASCADE",
+    onDelete: "RESTRICT",
   });
   Product.hasMany(Review, {
     foreignKey: "productId",
     as: "reviews",
-    onDelete: "CASCADE",
+    onDelete: "RESTRICT",
   });
 
   return Review;

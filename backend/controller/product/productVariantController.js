@@ -3,6 +3,15 @@ import { sendSuccess, sendError } from "../../Helper/response.helper.js";
 import { Op } from "sequelize";
 import razorpay from "../../route/customer/razorpay.js";
 
+const RAZORPAY_ITEM_CREATE_TIMEOUT_MS = 6000;
+const withTimeout = (promise, ms, label) =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    ),
+  ]);
+
 /**
  * Create Product Variant
  * POST /api/admin/products/:productId/variants
@@ -42,22 +51,26 @@ export const createProductVariant = async (req, res) => {
       return sendError(res, "Unit value not found", 404);
     }
 
-    // Create Razorpay item
+    // Create Razorpay item (with timeout so request doesn't hang)
     const variantName = `${product.name} - ${variantData.quantity}${unitValue.symbol || unitValue.name || ''}`;
     let razorpayItemId = null;
     try {
-      const razorpayItem = await razorpay.items.create({
-        name: variantName,
-        description: product.description || '',
-        amount: Math.round(variantData.price * 100),
-        currency: product.currency || "INR",
-        hsn_code: product.hsnCode,
-        tax_rate: product.taxRate,
-        unit: unitValue.symbol || unitValue.name || '',
-      });
+      const razorpayItem = await withTimeout(
+        razorpay.items.create({
+          name: variantName,
+          description: product.description || '',
+          amount: Math.round(variantData.price * 100),
+          currency: product.currency || "INR",
+          hsn_code: product.hsnCode,
+          tax_rate: product.taxRate,
+          unit: unitValue.symbol || unitValue.name || '',
+        }),
+        RAZORPAY_ITEM_CREATE_TIMEOUT_MS,
+        "Razorpay item create"
+      );
       razorpayItemId = razorpayItem.id;
     } catch (razorpayError) {
-      console.error("Razorpay item creation failed:", razorpayError);
+      console.error("Razorpay item creation failed (or timed out):", razorpayError?.message || razorpayError);
     }
 
     // Check if this should be default (if no default exists)
@@ -78,7 +91,7 @@ export const createProductVariant = async (req, res) => {
       barcode: variantData.barcode || null,
       gtin: variantData.gtin || null,
       stock: variantData.stock || 0,
-      weight: reqData.weight,
+      weight: variantData.weight ?? null,
       minOrderQuantity: variantData.minOrderQuantity || 1,
       maxOrderQuantity: variantData.maxOrderQuantity || null,
       discount: variantData.discount || 0,

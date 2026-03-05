@@ -17,7 +17,8 @@ const createProductVariantModel = (sequelize) => {
         model: 'Products',
         key: 'id',
       },
-      onDelete: 'CASCADE',
+      onDelete: 'RESTRICT',
+      onUpdate: 'CASCADE',
     },
     unitValueId: {
       type: DataTypes.INTEGER,
@@ -147,10 +148,10 @@ const createProductVariantModel = (sequelize) => {
   });
 
   // Associations
-  ProductVariant.belongsTo(Product, { foreignKey: 'productId', as: 'product', onDelete: 'CASCADE' });
+  ProductVariant.belongsTo(Product, { foreignKey: 'productId', as: 'product', onDelete: 'RESTRICT' });
   ProductVariant.belongsTo(UnitValue, { foreignKey: 'unitValueId', as: 'unitValue', onDelete: 'RESTRICT' });
 
-  Product.hasMany(ProductVariant, { foreignKey: 'productId', as: 'variants', onDelete: 'CASCADE' });
+  Product.hasMany(ProductVariant, { foreignKey: 'productId', as: 'variants', onDelete: 'RESTRICT' });
   UnitValue.hasMany(ProductVariant, { foreignKey: 'unitValueId', as: 'variants', onDelete: 'RESTRICT' });
 
   return ProductVariant;

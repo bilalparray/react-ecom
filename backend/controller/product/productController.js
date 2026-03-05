@@ -1,8 +1,19 @@
-import { Product, Image, categories as Category, ProductVariant, UnitValue, Review } from "../../db/dbconnection.js";
+import { Product, Image, categories as Category, ProductVariant, UnitValue, Review, OrderRecord } from "../../db/dbconnection.js";
 import { sendSuccess, sendError } from "../../Helper/response.helper.js";
-import { convertImageToBase64, deleteFileSafe } from "../../Helper/multer.helper.js";
+import { convertImageToBase64, convertImageToThumbnailBase64, deleteFileSafe } from "../../Helper/multer.helper.js";
 import { Op, fn, col, literal } from "sequelize";
 import razorpay from "../../route/customer/razorpay.js";
+
+/** Razorpay item creation timeout (ms). Keeps create-product under frontend timeout (e.g. 15s). */
+const RAZORPAY_ITEM_CREATE_TIMEOUT_MS = 6000;
+
+const withTimeout = (promise, ms, label) =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    ),
+  ]);
 
 /**
  * Helper function to add review summary (averageRating, reviewCount) to products
@@ -145,19 +156,23 @@ async function addReviewSummaryToProducts(products) {
         
         let razorpayItemId = null;
         try {
-          const razorpayItem = await razorpay.items.create({
-            name: variantName,
-            description: reqData.description || '',
-            amount: Math.round(variantData.price * 100),
-            currency: reqData.currency || "INR",
-            hsn_code: reqData.hsnCode,
-            tax_rate: reqData.taxRate,
-            unit: unitValue?.symbol || unitValue?.name || '',
-          });
+          const razorpayItem = await withTimeout(
+            razorpay.items.create({
+              name: variantName,
+              description: reqData.description || '',
+              amount: Math.round(variantData.price * 100),
+              currency: reqData.currency || "INR",
+              hsn_code: reqData.hsnCode,
+              tax_rate: reqData.taxRate,
+              unit: unitValue?.symbol || unitValue?.name || '',
+            }),
+            RAZORPAY_ITEM_CREATE_TIMEOUT_MS,
+            "Razorpay item create"
+          );
           razorpayItemId = razorpayItem.id;
         } catch (razorpayError) {
-          console.error("Razorpay item creation failed:", razorpayError);
-          // Continue without Razorpay item ID if creation fails
+          console.error("Razorpay item creation failed (or timed out):", razorpayError?.message || razorpayError);
+          // Continue without Razorpay item ID if creation fails or times out
         }
 
         // Set first variant as default if none specified
@@ -275,14 +290,31 @@ async function addReviewSummaryToProducts(products) {
         // Delete removed variants (and their Razorpay items)
         for (const variantId of variantsToDelete) {
           const variant = await ProductVariant.findByPk(variantId);
-          if (variant?.razorpayItemId) {
-            try {
-              await razorpay.items.delete(variant.razorpayItemId);
-            } catch (e) {
-              console.error("Failed to delete Razorpay item:", e);
+          if (!variant) continue;
+          
+          // Check if variant has OrderRecords (historical orders)
+          const orderRecordCount = await OrderRecord.count({
+            where: { productVariantId: variantId }
+          });
+          
+          if (orderRecordCount > 0) {
+            // Variant has historical orders - use soft delete instead
+            console.log(`[ProductController] Variant ${variantId} has ${orderRecordCount} OrderRecords - using soft delete`);
+            await variant.update({ 
+              isActive: false,
+              lastModifiedBy: req.user.id 
+            });
+          } else {
+            // No historical orders - safe to hard delete
+            if (variant?.razorpayItemId) {
+              try {
+                await razorpay.items.delete(variant.razorpayItemId);
+              } catch (e) {
+                console.error("Failed to delete Razorpay item:", e);
+              }
             }
+            await variant.destroy();
           }
-          await variant.destroy();
         }
 
         // Update or create variants
@@ -346,18 +378,22 @@ async function addReviewSummaryToProducts(products) {
             
             let razorpayItemId = null;
             try {
-              const razorpayItem = await razorpay.items.create({
-                name: variantName,
-                description: product.description || '',
-                amount: Math.round(variantData.price * 100),
-                currency: product.currency || "INR",
-                hsn_code: product.hsnCode,
-                tax_rate: product.taxRate,
-                unit: unitValue?.symbol || unitValue?.name || '',
-              });
+              const razorpayItem = await withTimeout(
+                razorpay.items.create({
+                  name: variantName,
+                  description: product.description || '',
+                  amount: Math.round(variantData.price * 100),
+                  currency: product.currency || "INR",
+                  hsn_code: product.hsnCode,
+                  tax_rate: product.taxRate,
+                  unit: unitValue?.symbol || unitValue?.name || '',
+                }),
+                RAZORPAY_ITEM_CREATE_TIMEOUT_MS,
+                "Razorpay item create"
+              );
               razorpayItemId = razorpayItem.id;
             } catch (razorpayError) {
-              console.error("Razorpay item creation failed:", razorpayError);
+              console.error("Razorpay item creation failed (or timed out):", razorpayError?.message || razorpayError);
             }
 
             const isDefault = variantData.isDefaultVariant !== undefined 
@@ -439,79 +475,78 @@ async function addReviewSummaryToProducts(products) {
   };
 
 
-// ✅ SEARCH PRODUCTS WITH ODATA
-
+// ✅ SEARCH PRODUCTS - OPTIMIZED (Returns only id, name, and first thumbnail image)
 export const searchProductsOdata = async (req, res) => {
   try {
-    const keyword = req.query.q ? req.query.q.trim() : "";
+    // Support both 'query' and 'q' for backward compatibility
+    const keyword = (req.query.query || req.query.q || "").trim();
 
-    // Require at least 3 characters
-    if (!keyword || keyword.length < 3) {
-      return sendError(res, "Please enter at least 3 characters", 400);
+    // Require at least 1 character (changed from 3 for better UX)
+    if (!keyword || keyword.length < 1) {
+      return sendError(res, "Please enter at least 1 character", 400);
     }
 
-    const skip = parseInt(req.query.$skip, 10) || 0;
-    const top = parseInt(req.query.$top, 10) || 10;
+    // Pagination (optional). We only support plain 'skip' and 'top' to keep URLs clean:
+    //   /api/v1/product/search?query=abc
+    //   /api/v1/product/search?query=abc&top=10&skip=0
+    // If not provided, defaults are: skip = 0, top = 6
+    const skip = req.query.skip ? parseInt(req.query.skip, 10) || 0 : 0;
+    const top = req.query.top ? parseInt(req.query.top, 10) || 6 : 6; // Default to 6
 
-    // 🔍 Search condition across product name & category
+    // 🔍 Search condition - only product name (optimized)
     const whereCondition = {
-      [Op.or]: [
-        { name: { [Op.iLike]: `%${keyword}%` } },               // product name
-        { description: { [Op.iLike]: `%${keyword}%` } },        // product description if exists
-      ]
+      name: { [Op.iLike]: `%${keyword}%` },
+      isActive: true,  // Only show active products
     };
 
+    // Optimized query - only fetch what we need
     const { count: total, rows: items } = await Product.findAndCountAll({
+      attributes: ['id', 'name'], // Only id and name
       where: whereCondition,
       include: [
         {
-          model: Category,
-          as: "category",
-          where: { name: { [Op.iLike]: `%${keyword}%` } }, // match category too
-          required: false
-        },
-        { model: Image, as: "images" },
-        {
-          model: ProductVariant,
-          as: "variants",
-          where: { isActive: true },
-          include: [
-            { model: UnitValue, as: "unitValue" },
-          ],
+          model: Image,
+          as: "images",
+          attributes: ['id', 'imagePath'], // Only image path
           required: false,
+          limit: 1, // Only first image
+          order: [['createdOnUTC', 'ASC']], // Get first uploaded image
         },
       ],
       offset: skip,
       limit: top,
+      order: [['name', 'ASC']], // Sort by name
     });
     
- if (!items.length) {
+    if (!items.length) {
       return sendError(res, "No products found for this keyword", 404);
     }
-    // ✅ Convert images and transform variants
-    let result = items.map(prod => {
-      const obj = prod.toJSON();
-      obj.images = obj.images.map(img => convertImageToBase64(img.imagePath)).filter(Boolean);
-      
-      // Transform variants
-      if (obj.variants && Array.isArray(obj.variants)) {
-        obj.variants = obj.variants.map(variant => {
-          if (variant.unitValue) {
-            variant.unitId = variant.unitValueId;
-            variant.unitName = variant.unitValue.name || '';
-            variant.unitSymbol = variant.unitValue.symbol || variant.unitValue.name || '';
-          }
-          return variant;
-        });
-      }
-      
-      return obj;
+
+    // ✅ Convert only first image to compressed thumbnail base64
+    const result = await Promise.all(
+      items.map(async (prod) => {
+        const obj = prod.toJSON();
+        
+        // Get first image as compressed thumbnail
+        let thumbnail = null;
+        if (obj.images && obj.images.length > 0) {
+          thumbnail = await convertImageToThumbnailBase64(obj.images[0].imagePath);
+        }
+
+        // Return only: id, name, and thumbnail
+        return {
+          id: obj.id,
+          name: obj.name,
+          thumbnail: thumbnail, // Compressed thumbnail as base64
+        };
+      })
+    );
+
+    return sendSuccess(res, {
+      products: result,
+      total: total,
+      count: result.length,
     });
-
-    // Add review summary to each product
-    result = await addReviewSummaryToProducts(result);
-
-    return sendSuccess(res, result);
   } catch (err) {
     console.error("❌ SEARCH PRODUCTS ERROR:", err);
     return sendError(res, err.message);
@@ -532,7 +567,10 @@ export const getProductsByCategoryId = async (req, res) => {
     const top = parseInt(req.query.top, 10) || 10;
 
     const { count: total, rows: items } = await Product.findAndCountAll({
-      where: { categoryId },
+      where: { 
+        categoryId,
+        isActive: true,  // Only show active products
+      },
       offset: skip,
       limit: top,
       include: [
@@ -610,6 +648,7 @@ export const getProductCountByCategoryId = async (req, res) => {
 export const getNewArrivalProducts = async (req, res) => {
   try {
     const products = await Product.findAll({
+      where: { isActive: true },  // Only show active products
       order: [["createdOnUTC", "DESC"]], // newest first
       limit: 8,
       include: [
@@ -664,7 +703,10 @@ export const getNewArrivalProducts = async (req, res) => {
 export const getRecentBestSellingProducts = async (req, res) => {
   try {
     const products = await Product.findAll({
-      where: { isBestSelling: true },
+      where: { 
+        isBestSelling: true,
+        isActive: true,  // Only show active products
+      },
       order: [["createdOnUTC", "DESC"]], // newest best-sellers first
       limit: 8,
       include: [
@@ -782,6 +824,7 @@ export const updateBestSellingState = async (req, res) => {
 export const getAllProducts = async (req, res) => {
   try {
     const products = await Product.findAll({
+      where: { isActive: true },  // Only show active products
       include: [
         { model: Category, as: "category",
           attributes: ["id", "name"] },
@@ -833,6 +876,7 @@ export const getAllProductsByOdata = async (req, res) => {
     const skip = parseInt(req.query.skip, 10) || 0;
     const top = parseInt(req.query.top, 10) || 10;
     const { count: total, rows: items } = await Product.findAndCountAll({
+      where: { isActive: true },  // Only show active products
       offset: skip,
       limit: top,
       include: [
@@ -896,7 +940,11 @@ export const getProductCount = async (req, res) => {
 // ✅ GET PRODUCT BY ID
 export const getProductById = async (req, res) => {
   try {
-    const product = await Product.findByPk(req.params.id, {
+    const product = await Product.findOne({
+      where: { 
+        id: req.params.id,
+        isActive: true,  // Only show active products
+      },
       include: [
         { model: Category, as: "category",
           attributes: ["id", "name"] },
@@ -952,7 +1000,33 @@ export const deleteProduct = async (req, res) => {
       await razorpay.items.delete(product.razorpayItemId);
     }
 
-    // Step 2: Delete variants (and their Razorpay items)
+    // Step 2: Check if product has OrderRecords (historical orders)
+    const orderRecordCount = await OrderRecord.count({
+      where: { productId: product.id }
+    });
+    
+    if (orderRecordCount > 0) {
+      // Product has historical orders - use soft delete instead
+      console.log(`[ProductController] Product ${product.id} has ${orderRecordCount} OrderRecords - using soft delete`);
+      await product.update({ 
+        isActive: false,
+        lastModifiedBy: req.user.id 
+      });
+      
+      // Also soft delete all variants
+      await ProductVariant.update(
+        { isActive: false, lastModifiedBy: req.user.id },
+        { where: { productId: product.id } }
+      );
+      
+      return sendSuccess(res, { 
+        message: "Product deactivated successfully (has historical orders)",
+        softDeleted: true 
+      });
+    }
+    
+    // Step 3: No historical orders - safe to hard delete
+    // Delete variants (and their Razorpay items)
     const variants = await ProductVariant.findAll({ where: { productId: product.id } });
     for (const variant of variants) {
       if (variant.razorpayItemId) {
@@ -965,7 +1039,7 @@ export const deleteProduct = async (req, res) => {
     }
     await ProductVariant.destroy({ where: { productId: product.id } });
 
-    // Step 3: Delete images & DB record
+    // Step 4: Delete images & DB record
     const images = await Image.findAll({ where: { productId: product.id } });
     for (const img of images) deleteFileSafe(img.imagePath);
     await Image.destroy({ where: { productId: product.id } });
@@ -1022,11 +1096,41 @@ export const deleteProductVariant = async (req, res) => {
     if (!variant) return sendError(res, "Variant not found", 404);
 
     // Check if it's the last variant
-    const variantCount = await ProductVariant.count({ where: { productId } });
+    const variantCount = await ProductVariant.count({ where: { productId, isActive: true } });
     if (variantCount === 1) {
-      return sendError(res, "Cannot delete the last variant. Product must have at least one variant.", 400);
+      return sendError(res, "Cannot delete the last active variant. Product must have at least one active variant.", 400);
     }
 
+    // Check if variant has OrderRecords (historical orders)
+    const orderRecordCount = await OrderRecord.count({
+      where: { productVariantId: variantId }
+    });
+    
+    if (orderRecordCount > 0) {
+      // Variant has historical orders - use soft delete instead
+      console.log(`[ProductController] Variant ${variantId} has ${orderRecordCount} OrderRecords - using soft delete`);
+      await variant.update({ 
+        isActive: false,
+        lastModifiedBy: req.user.id 
+      });
+      
+      // If deleted variant was default, set another as default
+      if (variant.isDefaultVariant) {
+        const newDefault = await ProductVariant.findOne({ 
+          where: { productId, isActive: true, id: { [Op.ne]: variantId } } 
+        });
+        if (newDefault) {
+          await newDefault.update({ isDefaultVariant: true });
+        }
+      }
+      
+      return sendSuccess(res, { 
+        message: "Variant deactivated successfully (has historical orders)",
+        softDeleted: true 
+      });
+    }
+
+    // No historical orders - safe to hard delete
     // Delete Razorpay item
     if (variant.razorpayItemId) {
       try {

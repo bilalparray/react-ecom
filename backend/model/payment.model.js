@@ -23,6 +23,8 @@ const createPaymentModel = (sequelize) => {
         model: 'Orders',
         key: 'razorpayOrderId',
       },
+      onDelete: 'RESTRICT',
+      onUpdate: 'CASCADE',
     },
     orderId: {
       type: DataTypes.INTEGER,
@@ -32,6 +34,7 @@ const createPaymentModel = (sequelize) => {
         key: 'id',
       },
       onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
     },
     customerId: {
       type: DataTypes.INTEGER,
@@ -40,6 +43,8 @@ const createPaymentModel = (sequelize) => {
         model: 'CustomerDetails',
         key: 'id',
       },
+      onDelete: 'RESTRICT',
+      onUpdate: 'CASCADE',
     },
     amount: {
       type: DataTypes.DECIMAL(10, 2),
@@ -116,10 +121,10 @@ const createPaymentModel = (sequelize) => {
 
   // Associations
   Payment.belongsTo(Order, { foreignKey: 'orderId', as: 'order', onDelete: 'CASCADE' });
-  Payment.belongsTo(CustomerDetail, { foreignKey: 'customerId', as: 'customer' });
+  Payment.belongsTo(CustomerDetail, { foreignKey: 'customerId', as: 'customer', onDelete: 'RESTRICT' });
   
   Order.hasMany(Payment, { foreignKey: 'orderId', as: 'payments' });
-  CustomerDetail.hasMany(Payment, { foreignKey: 'customerId', as: 'orderPayments' });
+  CustomerDetail.hasMany(Payment, { foreignKey: 'customerId', as: 'orderPayments', onDelete: 'RESTRICT' });
 
   return Payment;
 };

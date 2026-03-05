@@ -16,7 +16,8 @@ const customerAddressDetailModel = (sequelize) => {
           model: "CustomerDetails",
           key: "id",
         },
-        onDelete: "CASCADE",
+        onDelete: "RESTRICT",
+        onUpdate: "CASCADE",
       },
       addressLine1: {
         type: DataTypes.STRING,

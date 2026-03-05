@@ -15,6 +15,8 @@ const createOrderModel = (sequelize) => {
         allowNull: false,
         // unique: true,
         references: { model: "CustomerDetails", key: "id" },
+        onDelete: 'RESTRICT',
+        onUpdate: 'CASCADE',
       },
       amount: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
       paid_amount: {

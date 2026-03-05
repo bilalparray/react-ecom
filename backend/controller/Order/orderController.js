@@ -1,11 +1,11 @@
-import { Order, OrderRecord, CustomerDetail, CustomerAddressDetail, ProductVariant, Product, UnitValue, Image } from "../../db/dbconnection.js";
+import { Order, OrderRecord, CustomerDetail, CustomerAddressDetail, ProductVariant, Product, UnitValue, Image, Payment } from "../../db/dbconnection.js";
 import razorpay from "../../route/customer/razorpay.js";
 import crypto from "crypto";
 import { sendSuccess, sendError } from "../../Helper/response.helper.js";
 import { generateOrderPaymentLink } from "../../Helper/razorpay.payment.helper.js";
 import { convertImageToBase64 } from "../../Helper/multer.helper.js";
 import { Op } from "sequelize";
-import { reduceStockForOrder, restoreStockForOrder, handleOrderStatusTransition } from "../../Helper/stockManagement.helper.js";
+import { reduceStockForOrder, handleOrderStatusTransition } from "../../Helper/stockManagement.helper.js";
 
 /**
  * Get Razorpay Public Key (Secure Endpoint)
@@ -204,14 +204,19 @@ export const createOrder = async (req, res) => {
     return sendSuccess(res, response, 201);
 
   } catch (err) {
-    console.error("❌ CREATE ORDER ERROR:", err);
-    
-    // Handle specific Razorpay errors
-    if (err.error?.code) {
-      return sendError(res, `Payment gateway error: ${err.error.description}`, 400);
-    }
-    
-    return sendError(res, err.message || "Internal server error");
+    console.error("❌ CREATE ORDER ERROR:", err?.message || err);
+    if (err?.error) console.error("❌ Razorpay error detail:", err.error);
+
+    const message = err.message || "Internal server error";
+    const isPaymentGatewayError =
+      err.error?.code ||
+      /payment gateway|payment link|razorpay|invalid access/i.test(message);
+
+    return sendError(
+      res,
+      message,
+      isPaymentGatewayError ? 400 : 500
+    );
   }
 };
 
@@ -325,6 +330,9 @@ export const verifyPayment = async (req, res) => {
     }
 
     // Create or update payment record
+    // When payment is verified successfully, set status to "captured" (not just "authorized")
+    const paymentStatusToSave = "captured"; // Payment is successful, so set to captured
+    
     let payment;
     if (existingPayment) {
       payment = existingPayment;
@@ -337,7 +345,7 @@ export const verifyPayment = async (req, res) => {
         amount: order.amount,
         amountPaise: paidAmountPaise,
         currency: razorpayPayment.currency || "INR",
-        status: razorpayPayment.status === "captured" ? "captured" : "authorized",
+        status: paymentStatusToSave,
         method: razorpayPayment.method || null,
         signature: razorpay_signature,
         isAmountValid,
@@ -347,7 +355,8 @@ export const verifyPayment = async (req, res) => {
             status: razorpayPayment.status,
             method: razorpayPayment.method,
             email: razorpayPayment.email,
-            contact: razorpayPayment.contact
+            contact: razorpayPayment.contact,
+            originalRazorpayStatus: razorpayPayment.status // Store original status for reference
           }
         },
         createdBy: req.user?.id || null
@@ -355,6 +364,7 @@ export const verifyPayment = async (req, res) => {
     }
 
     // Update order status
+    // When payment is verified successfully, set order status to "paid"
     let orderStatus = "paid";
     if (!isAmountValid) {
       orderStatus = "flagged";
@@ -370,9 +380,9 @@ export const verifyPayment = async (req, res) => {
       lastModifiedBy: req.user?.id || null
     });
 
-    // Mark payment as processed
+    // Mark payment as processed with captured status
     await payment.update({
-      status: razorpayPayment.status === "captured" ? "captured" : "authorized",
+      status: paymentStatusToSave,
       isProcessed: true,
       processedAt: new Date(),
       lastModifiedBy: req.user?.id || null
@@ -381,6 +391,7 @@ export const verifyPayment = async (req, res) => {
     // ✅ Reduce stock atomically when payment is verified and order is paid
     // Only reduce stock if payment is valid and order status is paid
     if (orderStatus === "paid" && isAmountValid) {
+      console.log(`🔄 [PAYMENT-VERIFY] Attempting stock reduction for order ${order.id}`);
       try {
         const stockResult = await reduceStockForOrder(
           order.id,
@@ -392,14 +403,21 @@ export const verifyPayment = async (req, res) => {
           }
         );
         
-        if (!stockResult.success && stockResult.errors) {
-          console.error("⚠️ Stock reduction completed with warnings:", stockResult.errors);
+        if (stockResult.skipped) {
+          console.log(`ℹ️ [PAYMENT-VERIFY] Stock reduction skipped: ${stockResult.message}`);
+        } else if (!stockResult.success && stockResult.errors) {
+          console.error(`⚠️ [PAYMENT-VERIFY] Stock reduction completed with warnings:`, stockResult.errors);
+        } else {
+          console.log(`✅ [PAYMENT-VERIFY] Stock reduction successful: ${stockResult.message}`);
         }
       } catch (stockErr) {
-        console.error("❌ Error reducing stock during payment verification:", stockErr);
+        console.error(`❌ [PAYMENT-VERIFY] CRITICAL: Error reducing stock during payment verification:`, stockErr);
+        console.error(`❌ [PAYMENT-VERIFY] Stack:`, stockErr.stack);
         // Don't fail the payment verification if stock reduction fails
         // Stock can be adjusted manually later
       }
+    } else {
+      console.log(`ℹ️ [PAYMENT-VERIFY] Skipping stock reduction - Order status: ${orderStatus}, Amount valid: ${isAmountValid}`);
     }
 
     // Fetch complete order with items (no need for customer details in verification response)
@@ -579,6 +597,13 @@ export const getAllOrders = async (req, res) => {
             ]
           }
         ]
+      },
+      {
+        model: Payment,
+        as: "payments",
+        required: false,
+        limit: 1,
+        order: [["createdOnUTC", "DESC"]]
       }
     ];
 
@@ -684,6 +709,13 @@ export const getOrderById = async (req, res) => {
             ]
           }
         ]
+      },
+      {
+        model: Payment,
+        as: "payments",
+        required: false,
+        limit: 1,
+        order: [["createdOnUTC", "DESC"]]
       }
     ];
 
@@ -785,6 +817,12 @@ export const updateOrderStatus = async (req, res) => {
     }, { transaction: t });
 
     // ✅ Handle stock management based on status transition
+    // NOTE: Stock operations use their own transaction for atomicity
+    // We handle stock AFTER committing the order status update to avoid transaction conflicts
+    await t.commit();
+    console.log(`✅ [ORDER-STATUS-UPDATE] Order status updated to ${newStatus} for order ${orderId}`);
+    
+    console.log(`🔄 [ORDER-STATUS-UPDATE] Handling stock transition for order ${orderId}: ${oldStatus} → ${newStatus}`);
     let stockResult = null;
     try {
       stockResult = await handleOrderStatusTransition(
@@ -797,13 +835,18 @@ export const updateOrderStatus = async (req, res) => {
           updatedVia: 'admin_status_update',
         }
       );
+      
+      if (stockResult.skipped) {
+        console.log(`ℹ️ [ORDER-STATUS-UPDATE] Stock transition skipped: ${stockResult.message}`);
+      } else {
+        console.log(`✅ [ORDER-STATUS-UPDATE] Stock transition successful: ${stockResult.message}`);
+      }
     } catch (stockErr) {
-      console.error("❌ Error handling stock transition:", stockErr);
+      console.error(`❌ [ORDER-STATUS-UPDATE] CRITICAL: Error handling stock transition:`, stockErr);
+      console.error(`❌ [ORDER-STATUS-UPDATE] Stack:`, stockErr.stack);
       // Log error but don't fail the status update
       // Stock can be adjusted manually if needed
     }
-
-    await t.commit();
 
     return sendSuccess(res, {
       message: "Order status updated successfully",
@@ -821,8 +864,12 @@ export const updateOrderStatus = async (req, res) => {
     });
 
   } catch (err) {
-    await t.rollback();
-    console.error("❌ UPDATE ORDER STATUS ERROR:", err);
+    if (t && !t.finished) {
+      await t.rollback();
+      console.error(`❌ [ORDER-STATUS-UPDATE] Transaction rolled back due to error`);
+    }
+    console.error("❌ [ORDER-STATUS-UPDATE] UPDATE ORDER STATUS ERROR:", err);
+    console.error("❌ [ORDER-STATUS-UPDATE] Stack:", err.stack);
     return sendError(res, err.message || "Failed to update order status", 500);
   }
 };

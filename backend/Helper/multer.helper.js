@@ -147,6 +147,30 @@ export const compressAndConvertImage = async (filePath) => {
 };
 
 /**
+ * Fast single-pass (max 2 passes) compression for product uploads.
+ * Keeps create-product under typical frontend timeout (e.g. 15s) when multiple images are uploaded.
+ */
+const compressProductImageFast = async (inputPath) => {
+  const ext = path.extname(inputPath).toLowerCase();
+  const base = inputPath.slice(0, -ext.length);
+  const outputPath = `${base}_fast.webp`;
+  await sharp(inputPath)
+    .rotate()
+    .resize({ width: 1200, withoutEnlargement: true })
+    .webp({ quality: 72, effort: 4 })
+    .toFile(outputPath);
+  if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+  const sizeKB = Math.round(fs.statSync(outputPath).size / 1024);
+  if (sizeKB <= 280) return outputPath;
+  const smallerPath = `${base}_fast_q50.webp`;
+  await sharp(outputPath)
+    .webp({ quality: 50, effort: 3 })
+    .toFile(smallerPath);
+  fs.unlinkSync(outputPath);
+  return smallerPath;
+};
+
+/**
  * Separate compress/convert for banners (isolated for future tuning)
  *
  * Currently uses same thresholds (<= 100KB) but you can raise widths or quality later if banners need higher fidelity.
@@ -233,44 +257,36 @@ export const compressUploadedBannerImage = async (req, res, next) => {
 };
 
 /**
- * Middleware to compress multiple images
+ * Middleware to compress multiple images (parallel + fast path to avoid request timeout).
  */
 export const compressMultipleImages = async (req, res, next) => {
   try {
-    // Support both req.files (array) and req.file (single)
     const files = req.files || (req.file ? [req.file] : []);
-    
     if (!files || files.length === 0) {
       console.log("ℹ️ No files to compress");
       return next();
     }
 
-    console.log(`🖼️ Compressing ${files.length} image(s)...`);
-    
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      if (file && file.path) {
+    console.log(`🖼️ Compressing ${files.length} image(s) (parallel, fast path)...`);
+    await Promise.all(
+      files.map(async (file, i) => {
+        if (!file?.path) return;
         try {
-          const compressedPath = await compressAndConvertImage(file.path);
+          const compressedPath = await compressProductImageFast(file.path);
           file.path = compressedPath;
           file.filename = path.basename(compressedPath);
           console.log(`✅ Compressed image ${i + 1}/${files.length}: ${file.filename}`);
         } catch (compressErr) {
-          console.error(`❌ Error compressing image ${i + 1}:`, compressErr);
-          // Continue with other images even if one fails
+          console.error(`❌ Error compressing image ${i + 1}:`, compressErr?.message || compressErr);
         }
-      }
-    }
-    
-    // Ensure req.files is set (for consistency)
-    if (!req.files && files.length > 0) {
-      req.files = files;
-    }
-    
+      })
+    );
+
+    if (!req.files && files.length > 0) req.files = files;
     next();
   } catch (err) {
     console.error("❌ Error in compressMultipleImages:", err);
-    next(); // Continue even if compression fails
+    next();
   }
 };
 
@@ -311,6 +327,47 @@ export const convertImageToBase64 = (filePath) => {
   } catch (err) {
     console.error("Base64 convert error:", err);
     return null;
+  }
+};
+
+/**
+ * Convert image to compressed thumbnail base64 (optimized for search results)
+ * Resizes to max 200x200 and converts to WebP for smaller size
+ */
+export const convertImageToThumbnailBase64 = async (filePath) => {
+  try {
+    if (!filePath) return null;
+
+    // Extract relative path after /var/www/
+    let relativePath = filePath.replace("/var/www/", "").replace("\\var\\www\\", "");
+
+    let finalPath = "";
+
+    if (process.platform === "win32") {
+      finalPath = path.join(LOCAL_ROOT, relativePath);
+    } else {
+      finalPath = path.join(VPS_ROOT, relativePath);
+    }
+
+    if (!fs.existsSync(finalPath)) {
+      console.log("❌ Image not found for thumbnail:", finalPath);
+      return null;
+    }
+
+    // Use sharp to resize and convert to WebP for compression
+    const thumbnailBuffer = await sharp(finalPath)
+      .resize(200, 200, {
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .webp({ quality: 75 })
+      .toBuffer();
+
+    return `data:image/webp;base64,${thumbnailBuffer.toString("base64")}`;
+  } catch (err) {
+    console.error("Thumbnail base64 convert error:", err);
+    // Fallback to regular base64 if sharp fails
+    return convertImageToBase64(filePath);
   }
 };
 
