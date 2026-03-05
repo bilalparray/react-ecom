@@ -6,12 +6,27 @@ import { toast } from "react-toastify";
 export default function WishlistPage() {
   const { wishlistItems, addToCart, removeFromWishlist } = useCartStore();
   const [search, setSearch] = useState("");
+  const [addedItems, setAddedItems] = useState<Set<string>>(new Set());
 
   const filtered = useMemo(() => {
     return wishlistItems.filter((p) =>
       p.name.toLowerCase().includes(search.toLowerCase())
     );
   }, [wishlistItems, search]);
+
+  const handleAddToCart = (item: any) => {
+    addToCart(item);
+    const key = `${item.productId}-${item.variantId}`;
+    setAddedItems((prev) => new Set(prev).add(key));
+    
+    setTimeout(() => {
+      setAddedItems((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(key);
+        return newSet;
+      });
+    }, 2000);
+  };
 
   const shareProduct = (product: any) => {
     const url = `${window.location.origin}/product/${product.productId}`;
@@ -76,9 +91,9 @@ export default function WishlistPage() {
               {/* Actions */}
               <div className="d-flex align-items-center gap-2">
                 <button
-                  onClick={() => addToCart(p)}
+                  onClick={() => handleAddToCart(p)}
                   className="btn btn-success btn-sm">
-                  <i className="bi bi-cart"></i>
+                  <i className={`bi ${addedItems.has(`${p.productId}-${p.variantId}`) ? "bi-check-circle-fill" : "bi-cart"}`}></i>
                 </button>
 
                 <button

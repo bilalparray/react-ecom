@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import "./DashboardSidebar.css";
+import { clearToken } from "../../../auth/tokenManager";
 
 interface MenuItem {
   path: string;
@@ -65,7 +66,7 @@ export default function DashboardSidebar() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem("token");
+    clearToken();
     navigate("/auth/login", { replace: true });
   };
 
@@ -80,10 +81,7 @@ export default function DashboardSidebar() {
     <>
       {/* Mobile Overlay */}
       {toggled && (
-        <div
-          className="sidebar-overlay"
-          onClick={() => setToggled(false)}
-        />
+        <div className="sidebar-overlay" onClick={() => setToggled(false)} />
       )}
 
       {/* Mobile Top Bar */}

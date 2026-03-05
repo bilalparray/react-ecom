@@ -6,15 +6,16 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
-ENV VITE_API_URL=http://13.235.53.15:8081/api/v1
-RUN npx vite build
+
+ARG VITE_API_URL
+ENV VITE_API_URL=${VITE_API_URL}
+
+RUN npm run build
+
 # -------- Runtime --------
-FROM node:22-alpine
-WORKDIR /app
+FROM nginx:alpine
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist/client /usr/share/nginx/html
 
-RUN npm install -g vite
-COPY --from=build /app/dist ./dist
-
-EXPOSE 4200
-CMD ["vite", "preview", "--host", "0.0.0.0", "--port", "4200"]
-
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { clearToken } from "../../../auth/tokenManager";
 
 type AdminTopNavProps = {
   title: string;
@@ -9,8 +10,8 @@ export default function AdminTopNav({ title }: AdminTopNavProps) {
 
   const handleLogout = () => {
     // clear auth state here
-    localStorage.clear(); // adjust if using cookies / store
-    navigate("/auth/login");
+    clearToken();
+    navigate("/auth/login", { replace: true });
   };
 
   return (

@@ -262,8 +262,8 @@ export default function ProductPage() {
                   <span className="qty-value">{qty}</span>
                   <button
                     className="qty-btn"
-                    onClick={() => setQty(Math.min(variant.stock, qty + 1))}
-                    disabled={qty >= variant.stock || !variant.isInStock}>
+                    onClick={() => setQty(qty + 1)}
+                  >
                     <i className="bi bi-plus"></i>
                   </button>
                 </div>

@@ -144,7 +144,7 @@ export default function ContactUsList() {
       </div>
 
       {/* Actions Bar */}
-      <div className="actions-bar">
+      <div className="actions-bar hide">
         <button className="btn btn-primary btn-add" onClick={openCreate}>
           <i className="bi bi-plus-circle-fill me-2"></i>
           Add New Message
@@ -258,7 +258,7 @@ export default function ContactUsList() {
                       <td className="text-end">
                         <div className="action-buttons">
                           <button
-                            className="btn btn-sm btn-edit"
+                            className="btn btn-sm btn-edit hide"
                             onClick={() => openEdit(c)}
                             disabled={actionLoading}>
                             <i className="bi bi-pencil-fill me-1"></i>
@@ -378,11 +378,10 @@ export default function ContactUsList() {
                   return (
                     <button
                       key={pageNum}
-                      className={`btn btn-pagination-number ${
-                        pageNum === page
-                          ? "btn-primary active"
-                          : "btn-outline-secondary"
-                      }`}
+                      className={`btn btn-pagination-number ${pageNum === page
+                        ? "btn-primary active"
+                        : "btn-outline-secondary"
+                        }`}
                       onClick={() => setPage(pageNum)}
                       disabled={loading}>
                       {pageNum}
@@ -449,9 +448,8 @@ export default function ContactUsList() {
                 </label>
                 <input
                   type="email"
-                  className={`form-control-custom ${
-                    emailError ? "is-invalid" : ""
-                  }`}
+                  className={`form-control-custom ${emailError ? "is-invalid" : ""
+                    }`}
                   placeholder="Enter email address"
                   value={form.email}
                   onChange={(e) => {

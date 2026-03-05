@@ -21,8 +21,9 @@
 </head>
 
 <body>
-  <div id="root"></div>
-  <script type="module" src="/src/main.tsx"></script>
+  <div id="root"><!--ssr-outlet--></div>
+  <!--ssr-query-state-->
+  <script type="module" src="/src/entry-client.tsx"></script>
 </body>
 
 </html>

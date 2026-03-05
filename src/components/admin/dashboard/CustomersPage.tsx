@@ -7,7 +7,6 @@ import { toast } from "react-toastify";
 import {
   exportToPDF,
   exportToExcel,
-  formatDateForExport,
 } from "../../../utils/exportUtils";
 import type { ExportColumn } from "../../../utils/exportUtils";
 import "./CustomersPage.css";

@@ -35,7 +35,7 @@ export const useCheckoutStore = create<{
   select: (c: Customer) => void;
   save: (c: Customer) => void;
 }>((set) => ({
-  customers: JSON.parse(localStorage.getItem("customers") || "[]"),
+  customers: typeof window !== "undefined" ? JSON.parse(localStorage.getItem("customers") || "[]") : [],
   selected: null,
 
   select: (c) => set({ selected: c }),
@@ -43,7 +43,9 @@ export const useCheckoutStore = create<{
   save: (c) =>
     set((state) => {
       const list = [...state.customers.filter((x) => x.id !== c.id), c];
-      localStorage.setItem("customers", JSON.stringify(list));
+      if (typeof window !== "undefined") {
+        localStorage.setItem("customers", JSON.stringify(list));
+      }
       return { customers: list, selected: c };
     }),
 }));

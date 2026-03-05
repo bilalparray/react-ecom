@@ -315,7 +315,7 @@ export default function BannerList() {
 
             {/* Mobile Card View */}
             <div className="banners-mobile d-md-none">
-              {banners.map((b: any, i: number) => (
+              {banners.map((b: any) => (
                 <div key={b.id} className="banner-card-mobile">
                   {/* Banner Image Preview */}
                   <div className="banner-preview-mobile-wrapper">

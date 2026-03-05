@@ -3,6 +3,7 @@ import { useCartStore } from "../../store/useCartStore";
 import { useCategories } from "../../hooks/useCategories";
 import "./Header.css";
 import { useEffect, useRef, useState } from "react";
+import { searchProductFromHeader } from "../../services/ProductService";
 
 export function Header() {
   const navigate = useNavigate();
@@ -17,8 +18,14 @@ export function Header() {
   const { categories } = useCategories();
   const [showCat, setShowCat] = useState(false);
   const [showCatMobile, setShowCatMobile] = useState(false);
-  const [isScrolled, setIsScrolled] = useState(false);
   const [showStickyNav, setShowStickyNav] = useState(false);
+
+  // Header search modal state
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [modalQuery, setModalQuery] = useState("");
+  const [modalResults, setModalResults] = useState<any[]>([]);
+  const [modalLoading, setModalLoading] = useState(false);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const total = cartItems.reduce((s, i) => s + i.price * i.qty, 0);
   const catRef = useRef<HTMLDivElement>(null);
@@ -102,7 +109,6 @@ export function Header() {
 
     const updateScrollState = () => {
       const scrollY = window.scrollY;
-      setIsScrolled(scrollY > 0);
       // Show sticky nav when scrolled past 100px
       setShowStickyNav(scrollY > 100);
       ticking = false;
@@ -118,6 +124,54 @@ export function Header() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
+  /* ================= SEARCH MODAL (DEBOUNCE) ================= */
+  useEffect(() => {
+    if (!showSearchModal) return;
+
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    }
+
+    const q = modalQuery.trim();
+    if (!q) {
+      setModalResults([]);
+      setModalLoading(false);
+      return;
+    }
+
+    searchDebounceRef.current = setTimeout(async () => {
+      setModalLoading(true);
+      try {
+        const res = await searchProductFromHeader(q);
+        setModalResults(Array.isArray(res) ? res : []);
+      } catch {
+        setModalResults([]);
+      } finally {
+        setModalLoading(false);
+      }
+    }, 400);
+
+    return () => {
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current);
+        searchDebounceRef.current = null;
+      }
+    };
+  }, [modalQuery, showSearchModal]);
+
+  const closeSearchModal = () => {
+    setShowSearchModal(false);
+    setModalQuery("");
+    setModalResults([]);
+    setModalLoading(false);
+  };
+
+  const handleSearchResultClick = (id: number) => {
+    closeSearchModal();
+    navigate(`/product/${id}`);
+  };
   /* ================= MOBILE ================= */
   const MobileHeader = () => (
     <div className="d-lg-none">
@@ -132,7 +186,7 @@ export function Header() {
         </Link>
 
         <div className="d-flex align-items-center gap-3">
-          <button className="icon-btn" onClick={() => navigate("/shop")}>
+          <button className="icon-btn" onClick={() => setShowSearchModal(true)}>
             <i className="bi bi-search desktop-icons"></i>
           </button>
           <Link to="/myorders">
@@ -193,8 +247,8 @@ export function Header() {
       <div className="mp-top-bar">
         <div className="container d-flex justify-content-between">
           <div>
-            10, Nh44, Near J&K Bank, Barsoo, Jammu and Kashmir, 192122 • +91 9541560938 +917051476537 •
-            alpinesaffron24@gmail.com
+            10, Nh44, Near J&K Bank, Barsoo, Jammu and Kashmir, 192122 • +91
+            9541560938 +917051476537 • alpinesaffron24@gmail.com
           </div>
           <div className="d-flex gap-3">
             <a
@@ -224,9 +278,13 @@ export function Header() {
           <span className="mp-brand">Alpine Saffron </span>
         </Link>
 
-        <div className="mp-search" onClick={() => navigate("/shop")}>
+        {/* Open search modal instead of navigating to shop */}
+        <div
+          className="mp-search"
+          onClick={() => setShowSearchModal(true)}
+          role="button">
           <input placeholder="Search for products..." readOnly />
-          <button>
+          <button type="button">
             <i className="bi bi-search"></i>
           </button>
         </div>
@@ -434,7 +492,9 @@ export function Header() {
                               }>
                               −
                             </button>
-                            <div className="px-3 fw-semibold">{item.qty}</div>
+                            <div className="px-3 fw-semibold cart-drawer-qty">
+                              {item.qty}
+                            </div>
                             <button
                               className="btn px-2"
                               onClick={() =>
@@ -480,6 +540,62 @@ export function Header() {
             )}
           </div>
         </div>
+
+        {/* SEARCH MODAL */}
+        {showSearchModal && (
+          <div className="search-modal-backdrop" onClick={closeSearchModal}>
+            <div className="search-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="search-modal-header">
+                <h5 className="search-modal-title">Search products</h5>
+                <button
+                  type="button"
+                  className="search-modal-close"
+                  onClick={closeSearchModal}
+                  aria-label="Close search">
+                  <i className="bi bi-x-lg" />
+                </button>
+              </div>
+
+              <input
+                className="search-modal-input"
+                type="text"
+                placeholder="Type to search…"
+                autoFocus
+                value={modalQuery}
+                onChange={(e) => setModalQuery(e.target.value)}
+              />
+
+              <div className="search-modal-results">
+                {modalLoading ? (
+                  <div className="search-modal-loading">
+                    <div
+                      className="spinner-border spinner-border-sm text-primary"
+                      role="status">
+                      <span className="visually-hidden">Loading…</span>
+                    </div>
+                    <span className="ms-2">Searching…</span>
+                  </div>
+                ) : !modalQuery.trim() ? null : modalResults.length === 0 ? (
+                  <div className="search-modal-empty">
+                    <i className="bi bi-search" />
+                    <span>No products found</span>
+                  </div>
+                ) : (
+                  modalResults.map((p: any) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className="search-modal-item"
+                      onClick={() => handleSearchResultClick(p.id)}>
+                      {p.thumbnail && <img src={p.thumbnail} alt={p.name} />}
+                      <span className="search-modal-name">{p.name}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </header>
 
       {/* Sticky Navigation Bar - Desktop */}
@@ -549,7 +665,9 @@ export function Header() {
             )}
 
             <div className="d-flex align-items-center gap-3">
-              <button className="icon-btn" onClick={() => navigate("/shop")}>
+              <button
+                className="icon-btn"
+                onClick={() => setShowSearchModal(true)}>
                 <i className="bi bi-search desktop-icons"></i>
               </button>
               <Link to="/myorders">

@@ -23,3 +23,10 @@ export function fetchProductsByCategory(
 export function fetchProductCountByCategory(categoryId: number) {
   return apiGet<any>(`/product/ByCategoryId/${categoryId}/count`);
 }
+
+export function searchProductFromHeader(query: string) {
+  const q = encodeURIComponent(query);
+  // Backend expects: /product/search?query=apple&q=banana&top=10&skip=0
+  // We send the same search text for both query and q, with fixed paging.
+  return apiGet<any>(`/product/search?query=${q}&q=${q}&top=10&skip=0`);
+}

@@ -3,6 +3,7 @@ import {
   fetchPaginatedProducts,
   fetchProduct,
   fetchProductCount,
+  searchProductFromHeader as fetchSearchProductsFromHeader,
 } from "../api/product.api";
 import { fetchRelatedProducts } from "../api/related-products.api";
 import type { ProductDTO } from "../dto/productDTO";
@@ -52,19 +53,53 @@ export async function getProductCount(): Promise<number> {
 }
 export async function getBestSellingProducts(): Promise<Product[]> {
   const dtos = await fetchBestSellingProducts();
+  if (dtos?.isError || !dtos?.successData || !Array.isArray(dtos.successData)) {
+    console.warn("Failed to fetch best selling products:", dtos?.errorData?.displayMessage || "Unknown error");
+    return [];
+  }
   return dtos.successData.map(mapProduct);
 }
 export async function getRelatedProducts(id: number): Promise<Product[]> {
   const dtos = await fetchRelatedProducts(id);
+  if (dtos?.isError || !dtos?.successData || !Array.isArray(dtos.successData)) {
+    console.warn("Failed to fetch related products:", dtos?.errorData?.displayMessage || "Unknown error");
+    return [];
+  }
   return dtos.successData.map(mapProduct);
 }
 export async function getPaginatedProducts(skip: number, top: number) {
   const response = await fetchPaginatedProducts(skip, top);
+  if (response?.isError || !response?.successData || !Array.isArray(response.successData)) {
+    console.warn("Failed to fetch paginated products:", response?.errorData?.displayMessage || "Unknown error");
+    return { products: [] };
+  }
   return {
     products: response.successData.map(mapProduct),
   };
 }
 export async function getPaginatedProductsForGrid(skip: number, top: number) {
   const response = await fetchPaginatedProducts(skip, top);
+  if (response?.isError || !response?.successData || !Array.isArray(response.successData)) {
+    console.warn("Failed to fetch products for grid:", response?.errorData?.displayMessage || "Unknown error");
+    return [];
+  }
   return response.successData.map(mapProduct);
+}
+
+export async function searchProductFromHeader(query: string) {
+  const response = await fetchSearchProductsFromHeader(query);
+
+  const data: any = response?.successData.products;
+
+  // Normalize to always return an array
+  if (Array.isArray(data)) {
+    return data;
+  }
+
+  // Some APIs wrap results in { data: [...] }
+  if (data && Array.isArray(data.data)) {
+    return data.data;
+  }
+
+  return [];
 }

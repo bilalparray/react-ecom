@@ -1,3 +1,5 @@
+import "./Thankyou.css";
+
 export default function ThankYou() {
   return (
     <div
@@ -123,6 +125,7 @@ export default function ThankYou() {
 
           <a
             href="/myorders"
+            className="thankyou-view-order-btn"
             style={{
               flex: 1,
               textDecoration: "none",

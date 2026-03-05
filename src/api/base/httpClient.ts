@@ -22,17 +22,29 @@ httpClient.interceptors.response.use(
     return Promise.resolve(response.data);
   },
   (error) => {
-    if (error.response?.data) {
+    // Handle network errors (timeout, CORS, connection refused, etc.)
+    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      console.error(`API Timeout: ${error.config?.method?.toUpperCase()} ${error.config?.url}`, {
+        baseURL: error.config?.baseURL,
+        timeout: error.config?.timeout,
+        message: 'Request timed out. Check if backend is accessible and CORS is configured.'
+      });
+    } else if (error.code === 'ERR_NETWORK' || error.message.includes('Network Error')) {
+      console.error(`Network Error: ${error.config?.method?.toUpperCase()} ${error.config?.url}`, {
+        baseURL: error.config?.baseURL,
+        message: 'Network error. Check CORS settings and backend connectivity.'
+      });
+    } else if (error.response?.data) {
+      // Server responded with error
       return Promise.resolve(error.response.data);
     }
 
     return Promise.resolve({
-      responseStatusCode: 500,
+      responseStatusCode: error.response?.status || 500,
       isError: true,
       successData: undefined,
       errorData: {
-        displayMessage: error.message,
-
+        displayMessage: error.message || 'Network error. Please check your connection and backend server.',
         additionalProps: new Map(),
       },
     });

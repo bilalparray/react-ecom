@@ -12,10 +12,14 @@ export interface IndexedDBStorage {
 
 export class StorageService {
   private dbPromise: Promise<IDBPDatabase<IndexedDBStorage>>;
-  private sessionStorage: Storage = window.sessionStorage;
+  private sessionStorage: Storage = typeof window !== "undefined" ? window.sessionStorage : ({} as Storage);
 
   constructor() {
-    this.dbPromise = this.openIndexedDB();
+    if (typeof window !== "undefined") {
+      this.dbPromise = this.openIndexedDB();
+    } else {
+      this.dbPromise = Promise.reject(new Error("IndexedDB not available on server"));
+    }
   }
 
   // ─────────────────────────────────────────────────────────────

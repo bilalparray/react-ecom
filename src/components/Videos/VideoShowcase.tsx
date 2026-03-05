@@ -8,7 +8,7 @@ export default function VideoShowcase() {
   const { items, loading } = useVideos(page, pageSizeApi);
 
   const [index, setIndex] = useState(0);
-  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [isMobile, setIsMobile] = useState(typeof window !== "undefined" ? window.innerWidth <= 768 : false);
   const [activeVideo, setActiveVideo] = useState<string | null>(null);
   useEffect(() => {}, [items]);
   useEffect(() => {

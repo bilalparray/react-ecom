@@ -19,38 +19,46 @@ export function ProductCard({ product }: Props) {
   const { rating, count } = useProductRating(product.id);
 
   const defaultVariant =
-    product.variants.find((v) => v.isDefault) || product.variants[0];
+    product.variants?.find((v) => v.isDefault) || product.variants?.[0];
 
-  const [variant, setVariant] = useState<ProductVariant>(defaultVariant);
+  const [variant, setVariant] = useState<ProductVariant | undefined>(defaultVariant);
 
   useEffect(() => {
     setVariant(defaultVariant);
   }, [product]);
 
-  const price = variant.price;
-  const compare = variant.comparePrice || 0;
+  // Early return if no variant exists
+  if (!variant || !product.variants || product.variants.length === 0 || !variant.unit) {
+    return null;
+  }
+
+  // TypeScript guard: variant is guaranteed to be defined after the check above
+  const safeVariant = variant;
+
+  const price = safeVariant.price || 0;
+  const compare = safeVariant.comparePrice || 0;
   const discount =
     compare > price ? Math.round(((compare - price) / compare) * 100) : 0;
 
   const isWishlisted = wishlistItems.some(
-    (x) => x.productId === product.id && x.variantId === variant.id
+    (x) => x.productId === product.id && x.variantId === safeVariant.id
   );
 
   function handleWishlist() {
     const payload = {
       productId: product.id,
-      variantId: variant.id,
+      variantId: safeVariant.id,
       name: product.name,
       image: product.images?.[0],
-      price: variant.price,
-      comparePrice: variant.comparePrice,
-      weight: variant.weight,
-      unit: variant.unit.symbol,
-      stock: variant.stock,
+      price: safeVariant.price,
+      comparePrice: safeVariant.comparePrice,
+      weight: safeVariant.weight,
+      unit: safeVariant.unit.symbol,
+      stock: safeVariant.stock,
     };
 
     if (isWishlisted) {
-      removeFromWishlist(product.id, variant.id);
+      removeFromWishlist(product.id, safeVariant.id);
     } else {
       addToWishlist(payload);
     }
@@ -59,14 +67,14 @@ export function ProductCard({ product }: Props) {
   function handleAddToCart() {
     addToCart({
       productId: product.id,
-      variantId: variant.id,
+      variantId: safeVariant.id,
       name: product.name,
       image: product.images?.[0],
-      price: variant.price,
-      comparePrice: variant.comparePrice,
-      weight: variant.weight,
-      unit: variant.unit.symbol,
-      stock: variant.stock,
+      price: safeVariant.price,
+      comparePrice: safeVariant.comparePrice,
+      weight: safeVariant.weight,
+      unit: safeVariant.unit.symbol,
+      stock: safeVariant.stock,
     });
     setAdded(true);
 
@@ -107,14 +115,14 @@ export function ProductCard({ product }: Props) {
         </div>
 
         <div className="pc-price">
-          <span>₹{price}</span>
-          {compare > price && <del>₹{compare}</del>}
+          <span>₹{price}/{safeVariant.unit.symbol}</span>
+          {compare > price && <del>₹{compare}/{safeVariant.unit.symbol}</del>}
         </div>
 
         {product.variants.length > 1 && (
           <select
             className="pc-variant"
-            value={variant.id}
+            value={safeVariant.id}
             onChange={(e) =>
               setVariant(
                 product.variants.find((v) => v.id === Number(e.target.value))!
@@ -130,7 +138,7 @@ export function ProductCard({ product }: Props) {
       </div>
 
       <button
-        disabled={!variant.isInStock}
+        disabled={!safeVariant.isInStock}
         onClick={handleAddToCart}
         className="pc-cart">
         {added ? (
@@ -144,7 +152,7 @@ export function ProductCard({ product }: Props) {
         ) : (
           <>
             <i className="bi bi-cart"></i>
-            {variant.isInStock ? "Add To Cart" : "Out of Stock"}
+            {safeVariant.isInStock ? "Add To Cart" : "Out of Stock"}
           </>
         )}
       </button>

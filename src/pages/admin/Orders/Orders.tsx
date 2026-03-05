@@ -66,7 +66,23 @@ export default function OrdersPage() {
         maxAmount: filters.maxAmount ? Number(filters.maxAmount) : undefined,
       });
 
-      setOrders(res.orders);
+      // Check and auto-update order status based on payment status
+      const updatedOrders = res.orders.map((order: any) => {
+        // If order has payment and payment status is "captured", but order status is not "paid"
+        if (order.payments && order.payments.length > 0) {
+          const latestPayment = order.payments[0];
+          if (latestPayment.status === "captured" && order.status !== "paid" && order.status !== "flagged") {
+            // Auto-update order status to paid
+            updateStatus(order.id, "paid").catch((err) => {
+              console.error(`Failed to auto-update order ${order.id} status:`, err);
+            });
+            return { ...order, status: "paid" };
+          }
+        }
+        return order;
+      });
+
+      setOrders(updatedOrders);
       setTotal(res.total);
     } finally {
       setLoading(false);
@@ -79,6 +95,16 @@ export default function OrdersPage() {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, filters]);
+
+  // Auto-refresh orders every 30 seconds to check for status updates
+  useEffect(() => {
+    const interval = setInterval(() => {
+      load();
+    }, 30000); // Poll every 30 seconds
+
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, filters]);
 

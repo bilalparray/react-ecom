@@ -8,9 +8,12 @@ export default function CustomerTestimonials() {
   const { items, loading } = useTestimonials(page, pageSizeApi);
 
   const [index, setIndex] = useState(0);
-  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" ? window.innerWidth <= 768 : false
+  );
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const onResize = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);

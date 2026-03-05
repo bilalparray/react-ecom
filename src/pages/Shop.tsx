@@ -4,7 +4,7 @@ import { ProductCard } from "../components/Product/ProductCard";
 
 export default function Shop() {
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(12);
+  const [pageSize, setPageSize] = useState(8);
 
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<"price-asc" | "price-desc" | "az" | "za">(
@@ -18,6 +18,12 @@ export default function Shop() {
   /* Filtering + searching + sorting */
   const filteredProducts = useMemo(() => {
     let list = [...products];
+
+    // Filter out products without valid variants
+    list = list.filter((p) => {
+      const defaultVariant = p.variants?.find((v) => v.isDefault) || p.variants?.[0];
+      return defaultVariant && p.variants && p.variants.length > 0 && defaultVariant.unit;
+    });
 
     if (search) {
       list = list.filter((p) =>
@@ -93,6 +99,7 @@ export default function Shop() {
               setPageSize(Number(e.target.value));
               setPage(1);
             }}>
+            <option value={10}>10 / page</option>
             <option value={12}>12 / page</option>
             <option value={24}>24 / page</option>
             <option value={48}>48 / page</option>
@@ -121,9 +128,8 @@ export default function Shop() {
           <button
             key={i}
             onClick={() => setPage(i + 1)}
-            className={`btn ${
-              page === i + 1 ? "btn-success" : "btn-outline-secondary"
-            }`}>
+            className={`btn ${page === i + 1 ? "btn-success" : "btn-outline-secondary"
+              }`}>
             {i + 1}
           </button>
         ))}

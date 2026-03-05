@@ -12,7 +12,7 @@ export function Footer() {
       <div className="container pb-4 border-bottom border-secondary">
         <div className="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3">
           <div>
-            <h4 className="fw-bold mb-1">Alpine</h4>
+            <h4 className="fw-bold mb-1">Alpine Saffron</h4>
             <p className="text-secondary mb-0">
               The one stop shop for all your Healthy Foods
             </p>

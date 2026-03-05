@@ -39,6 +39,18 @@ export default function OrderDetailsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // Auto-refresh order every 30 seconds to check for status updates
+  useEffect(() => {
+    if (!id) return;
+    
+    const interval = setInterval(() => {
+      load();
+    }, 30000); // Poll every 30 seconds
+
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   const handleStatusChange = async (newStatus: string) => {
     if (!order) return;
     setUpdating(true);

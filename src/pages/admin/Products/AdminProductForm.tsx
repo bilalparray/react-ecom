@@ -94,18 +94,23 @@ export default function AdminProductForm() {
       });
   }, [id]);
 
-  // Handle image selection
+  // Handle image selection — append to existing images so multiple selections are kept
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    setImages(files);
+    if (files.length === 0) return;
 
-    // Create previews
+    setImages((prev) => [...prev, ...files]);
+
     const previews = files.map((file) => URL.createObjectURL(file));
     setImagePreviews((prev) => [...prev, ...previews]);
+
+    e.target.value = ""; // Reset input so user can add more images in another click
   };
 
   // Remove image
   const removeImage = (index: number) => {
+    const preview = imagePreviews[index];
+    if (preview?.startsWith("blob:")) URL.revokeObjectURL(preview);
     setImagePreviews((prev) => prev.filter((_, i) => i !== index));
     setImages((prev) => prev.filter((_, i) => i !== index));
   };
@@ -138,13 +143,14 @@ export default function AdminProductForm() {
     }));
   };
 
-  // Generate SKU
+  // Generate SKU (unique per variant by appending 1-based index)
   const generateSku = (index: number) => {
     const v = form.variants[index];
     const unit = units.find((u) => u.id === v.unitValueId);
-    const sku = `${
+    const base = `${
       form.itemId || form.name.replace(/\s+/g, "").toUpperCase()
     }-${v.quantity}${unit?.symbol || ""}`;
+    const sku = `${base}-${index + 1}`;
     updateVariant(index, "sku", sku);
     toast.success("SKU generated successfully");
   };

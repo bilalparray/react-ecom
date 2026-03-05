@@ -2,7 +2,10 @@ import { createProductReview, fetchProductReviews } from "../api/review.api";
 
 export async function getProductReviews(productId: number) {
   const res = await fetchProductReviews(productId);
-  const reviews = res.successData || [];
+  const allReviews = res.successData || [];
+  
+  // Filter only approved reviews
+  const reviews = allReviews.filter((r) => r.isApproved === true);
 
   return {
     reviews,

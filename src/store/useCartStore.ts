@@ -34,13 +34,11 @@ export const useCartStore = create<CartState>()(
         );
 
         if (existing) {
-          if (existing.qty < existing.stock) {
-            existing.qty++;
-            set({
-              cartItems: [...items],
-              cartCount: get().cartCount + 1,
-            });
-          }
+          existing.qty++;
+          set({
+            cartItems: [...items],
+            cartCount: get().cartCount + 1,
+          });
           return;
         }
 
@@ -55,7 +53,7 @@ export const useCartStore = create<CartState>()(
         const item = items.find(
           (x) => x.productId === productId && x.variantId === variantId
         );
-        if (!item || item.qty >= item.stock) return;
+        if (!item) return;
 
         item.qty++;
         set({ cartItems: [...items], cartCount: get().cartCount + 1 });
